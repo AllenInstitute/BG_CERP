@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import tfmindi
 
-# TF-MInDi import
+# TF-MINDI import
 from tfmindi import load_motif_collection
 
 # -------------------------------
@@ -58,7 +58,7 @@ for i, (motif_id, pwm) in enumerate(flat_collection.items()):
 
 
 # -------------------------------
-# 4. Load sampled TF-MInDi motifs
+# 4. Load sampled TF-MINDI motifs
 # -------------------------------
 import tfmindi as tm
 
