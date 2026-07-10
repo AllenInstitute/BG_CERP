@@ -1,6 +1,0 @@
-kind,enhancer_id,species,motif,aln_start_0b,aln_end_excl,aln_length,native_start_0b,native_end_excl,native_sequence
-shade_pattern,ALL,all 3,shared_atlas_hit,100,106,6,,,
-shade_pattern,ALL,all 3,shared_atlas_hit,195,200,5,,,
-shade_pattern,ALL,all 3,shared_atlas_hit,215,222,7,,,
-shade_pattern,ALL,all 3,shared_atlas_hit,345,350,5,,,
-shade_pattern,ALL,all 3,shared_atlas_hit,435,441,6,,,
