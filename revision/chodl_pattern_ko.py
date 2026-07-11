@@ -240,33 +240,69 @@ def project_to_msa(bundles: dict[str, dict], rows: list[str],
 
 
 def find_shaded_cores(rows, one_hot_aln, scores_aln, hits_aln):
+    """Find orthologous regions (all 3 species) that:
+
+      * are aligned (no MSA gap) in every ortholog,
+      * carry |contribution| > IMP_FRAC_OF_MAX * per-species contribution max
+        in every ortholog,
+      * overlap a FIMO motif hit in every ortholog, AND
+      * that FIMO hit is of the *same* motif family across all three
+        orthologs (sequence variation within the family is allowed).
+
+    Returns a list of (msa_start, msa_end, motif_label) tuples, where
+    motif_label is a ';'-joined list of the motif ids shared by every
+    ortholog across the entire run (or the union of per-column shared
+    motifs if no single motif spans the whole run).
+    """
     n, L_aln = len(IDS), len(rows[0])
 
     aligned_all = np.ones(L_aln, dtype=bool)
-    high_per_sp, pp_per_sp = [], []
-    fimo_any_per_sp = [np.zeros(L_aln, dtype=bool) for _ in range(n)]
+    high_per_sp: list[np.ndarray] = []
+    # per-species, per-column set of motif ids overlapping that column
+    motifs_per_col: list[list[set[str]]] = [
+        [set() for _ in range(L_aln)] for _ in range(n)]
+
     for i in range(n):
         aligned_all &= np.array([ch != "-" for ch in rows[i]])
         contrib = np.abs(scores_aln[i]).sum(axis=-1)
         cmax = float(contrib.max()) if contrib.size else 0.0
         high_per_sp.append(contrib > (IMP_FRAC_OF_MAX * cmax))
-        for _m, a, b, _st, _sc in hits_aln[i]:
-            fimo_any_per_sp[i][a:b] = True
+        for motif, a, b, _st, _sc in hits_aln[i]:
+            for c in range(max(0, a), min(L_aln, b)):
+                motifs_per_col[i][c].add(str(motif))
 
-    same_base = one_hot_aln[0].sum(axis=1) > 0
-    ref_idx = one_hot_aln[0].argmax(axis=1)
-    for i in range(1, n):
-        has = one_hot_aln[i].sum(axis=1) > 0
-        same_base &= has & (one_hot_aln[i].argmax(axis=1) == ref_idx)
+    # Per-column mask: intersection of motif-id sets across all species
+    # must be non-empty ("same STR SST-CHODL pattern, allowing sequence
+    # variation").
+    shared_motif_col = np.zeros(L_aln, dtype=bool)
+    shared_col_sets: list[set[str]] = [set() for _ in range(L_aln)]
+    for c in range(L_aln):
+        shared = set(motifs_per_col[0][c])
+        for i in range(1, n):
+            shared &= motifs_per_col[i][c]
+        shared_col_sets[c] = shared
+        shared_motif_col[c] = bool(shared)
 
     high_all = np.logical_and.reduce(high_per_sp)
-    fimo_all = np.logical_and.reduce(fimo_any_per_sp)
-
-    mask = aligned_all & same_base & high_all & fimo_all
+    mask = aligned_all & shared_motif_col & high_all
     core_runs = [(a, b) for a, b in contiguous_runs(mask)
                  if b - a >= SHADE_MIN_BP]
-    print(f"  [shade] {len(core_runs)} conserved shaded cores")
-    return core_runs
+
+    regions: list[tuple[int, int, str]] = []
+    for a, b in core_runs:
+        col_sets = [shared_col_sets[c] for c in range(a, b)]
+        # Prefer motif(s) shared across every column of the run;
+        # fall back to the union of per-column shared motifs otherwise.
+        common = set.intersection(*col_sets) if col_sets else set()
+        motifs_in_run = common if common else set().union(*col_sets)
+        motif_label = ";".join(sorted(motifs_in_run)) or "shared_motif"
+        regions.append((a, b, motif_label))
+
+    print(f"  [shade] {len(regions)} orthologous regions "
+          f"(shared FIMO motif family + |contrib|>{IMP_FRAC_OF_MAX:.0%} "
+          f"of seq max + FIMO hit, in all {n} orthologs; "
+          "sequence variation allowed)")
+    return regions
 
 
 # ── Pattern-family KO (uses keras) ────────────────────────────────────────
@@ -648,10 +684,11 @@ def render_figure(bundles, rows, nats, scores_aln, one_hot_aln,
                   facecolor=SHADED_CORE_COLOR, edgecolor=SHADED_CORE_COLOR,
                   alpha=SHADED_CORE_ALPHA,
                   label=(f"Shaded core (R1\u2013R{n_reg}): \u2265 "
-                         f"{SHADE_MIN_BP} bp with, in ALL {n} orthologs, "
-                         "same base +\n"
-                         f"|contribution| > {IMP_FRAC_OF_MAX:.0%} of the "
-                         "seq max + inside an atlas FIMO motif hit")),
+                         f"{SHADE_MIN_BP} bp orthologous region with, in ALL "
+                         f"{n} orthologs, a shared STR SST-CHODL FIMO "
+                         "motif family (sequence variation allowed)\n"
+                         f"+ |contribution| > {IMP_FRAC_OF_MAX:.0%} of the "
+                         "seq max + inside a FIMO motif hit")),
         Rectangle((0, 0), 1, 1,
                   facecolor=EXTRA_KO_COLOR, edgecolor=EXTRA_KO_EDGE,
                   alpha=EXTRA_KO_ALPHA, hatch="////", linewidth=0.9,
@@ -744,8 +781,7 @@ def main():
 
     scores_aln, one_hot_aln, _pp, hits_aln = project_to_msa(
         bundles, rows, nats)
-    core_runs = find_shaded_cores(rows, one_hot_aln, scores_aln, hits_aln)
-    shade_regions = [(a, b, "shared_atlas_hit") for a, b in core_runs]
+    shade_regions = find_shaded_cores(rows, one_hot_aln, scores_aln, hits_aln)
     ordered = sorted(shade_regions, key=lambda t: t[0])
 
     write_regions_csv(shade_regions, bundles, rows, nats)
